@@ -4,18 +4,13 @@
 #define DEBUG_R503
 
 #include <stdint.h>
-
-#ifdef DEBUG_R503
-#include "WiFiConsole.hpp"
-#endif
-
+#include "SoftwareSerial.h"
 
 /*
  * Confirmation Codes
  */
 // ESP8266 side confirmation codes
 #define SUCCESS 0
-#define ERROR_HEADER_MISMATCH (-1)
 #define ERROR_ADDRESS_MISMATCH (-2)
 #define ERROR_CHECKSUM_MISMATCH (-3)
 #define ERROR_TIMEOUT (-4)
@@ -34,8 +29,8 @@
 #define PID_END 0x08
 
 //aura control code
-#define AURA_BREATHING 0x01
-#define AURA_FLASHING 0x02
+#define AURA_BREATH 0x01
+#define AURA_FLASH 0x02
 #define AURA_ON 0x03
 #define AURA_OFF 0x04
 #define AURA_GRADUAL_ON 0x05
@@ -45,6 +40,9 @@
 #define AURA_RED 0x01
 #define AURA_BLUE 0x02
 #define AURA_PURPLE 0x03
+
+
+#define RECEIVE_TIMEOUT 1000
 
 struct Package {
     uint8_t id;
@@ -74,27 +72,23 @@ class R503 {
     static R503 *instance;
     static void fallingISR();
     static void risingISR();
-    int wakeupPin;
+    
     uint32_t address;
     uint32_t password;
     long baudrate;
-    volatile int fingerDown, fingerUp;
     
-    #ifdef DEBUG_R503
-    WiFiConsole *console;
-    #endif
+    int rxPin, txPin, touchPin;
+    SoftwareSerial *serial;
     
 public:
-    R503(int wakeupPin, uint32_t address, uint32_t password, long baudrate);
-    
-    #ifdef DEBUG_R503
-    R503(int wakeupPin, uint32_t address, uint32_t password, long baudrate, WiFiConsole *console);
-    #endif
+    R503(int rxPin, int txPin, int touchPin, uint32_t address = 0xFFFFFFFF, uint32_t password = 0x0, long baudrate = 57600);
+    virtual ~R503();
     
     void begin();
     void sendPackage(Package const &package);
     
     /* 
+     * reads the next package marked with 0xEF01
      * @package.length: size of memory block data points to
      * @package.data: pointer to memory block to write received data
      * @return: a ESP8266 confirmation code
@@ -115,6 +109,12 @@ public:
     int verifyPassword();
     int readProductInfo(ProductInfo &info);
     int auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times);
+    
+    #ifdef DEBUG_R503
+    void printProductInfo();
+    #endif
+    
+    bool isTouched();
     
 };
 

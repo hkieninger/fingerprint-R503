@@ -1,5 +1,4 @@
 #include "R503.hpp"
-#include "Arduino.h"
 
 /* 
  * Makro to send a command that only expects a one byte confirmation code
@@ -44,23 +43,23 @@ void R503::risingISR() {
     //R503::instance->onFingerUp();
 }
 
-R503::R503(int wakeupPin, uint32_t address, uint32_t password, long baudrate) : 
-    wakeupPin(wakeupPin), address(address), password(password), baudrate(baudrate) {
+R503::R503(int rxPin, int txPin, int touchPin, uint32_t address, uint32_t password, long baudrate) : 
+    rxPin(rxPin), txPin(txPin), touchPin(touchPin), address(address), password(password), baudrate(baudrate) {
     //R503::instance = this;
+    serial = new SoftwareSerial(rxPin, txPin);
 }
 
-#ifdef DEBUG_R503
-R503::R503(int wakeupPin, uint32_t address, uint32_t password, long baudrate, WiFiConsole *console) : 
-    R503(wakeupPin, address, password, baudrate) {
-    this->console = console;    
+R503::~R503() {
+    delete serial;
 }
-#endif
 
 void R503::begin() {
-    Serial.begin(baudrate);
-    pinMode(wakeupPin, INPUT);
-    //attachInterrupt(digitalPinToInterrupt(wakeupPin), R503::fallingISR, FALLING);
-    //attachInterrupt(digitalPinToInterrupt(wakeupPin), R503::risingISR, RISING);
+    pinMode(rxPin, INPUT);
+    pinMode(txPin, OUTPUT);
+    serial->begin(baudrate);
+    pinMode(touchPin, INPUT);
+    //attachInterrupt(digitalPinToInterrupt(touchPin), R503::fallingISR, FALLING);
+    //attachInterrupt(digitalPinToInterrupt(touchPin), R503::risingISR, RISING);
 }
 
 void R503::sendPackage(Package const &package) {
@@ -74,106 +73,103 @@ void R503::sendPackage(Package const &package) {
     
     #ifdef DEBUG_R503
     static int packageCount = 0;
-    console->printf("sending package %d: ", packageCount++);
+    Serial.printf("sending package %d: ", packageCount++);
     for(int i = 0; i < sizeof(bytes); i++) {
-        console->printf("%02X ", bytes[i]);
+        Serial.printf("%02X ", bytes[i]);
     }
     for(int i = 0; i < package.length; i++) {
-        console->printf("%02X ", package.data[i]);
+        Serial.printf("%02X ", package.data[i]);
     }
-    console->printf("%02X %02X\n", package.checksum >> 8, package.checksum & 0xFF); 
+    Serial.printf("%02X %02X\n", package.checksum >> 8, package.checksum & 0xFF); 
     #endif
     
-    Serial.write(bytes, sizeof(bytes));
-    Serial.write(package.data, package.length);
-    Serial.write(package.checksum >> 8);
-    Serial.write(package.checksum);
+    serial->write(bytes, sizeof(bytes));
+    serial->write(package.data, package.length);
+    serial->write(package.checksum >> 8);
+    serial->write(package.checksum);
 }
 
 int R503::receivePackage(Package &package) {
-    uint8_t bytes[9];
-    int ret;
-    
     #ifdef DEBUG_R503
     static int packageCount = 0;
-    console->printf("receiving package %d: ", packageCount++);
+    Serial.printf("receiving package %d: ", packageCount++);
     #endif
-    
-    ret = Serial.readBytes(bytes, 9);
-    if(ret != 9) {
+
+    unsigned long start = millis();
+    int index = 0;
+    uint16_t length;
+    while(millis() - start < RECEIVE_TIMEOUT) {
+        int byte = serial->read();
+        if(byte == -1)
+            continue;
         #ifdef DEBUG_R503
-        console->printf("timeout %d \n", ret);
+        Serial.printf("%02X ", byte);
         #endif
-        return ERROR_TIMEOUT;
+        switch(index) {
+            case 0:
+                if(byte != 0xEF)
+                    continue;
+                break;
+            case 1:
+                if(byte != 0x01) {
+                    index = 0;
+                    continue;
+                }
+                break;
+            case 2:
+            case 3:
+            case 4:
+            case 5:
+                if(byte != ((address >> (5 - index) * 8) & 0xFF)) {
+                    #ifdef DEBUG_R503
+                    Serial.printf("error: address mismatch\n");
+                    #endif
+                    return ERROR_ADDRESS_MISMATCH;
+                }
+                break;
+            case 6:
+                package.id = byte;
+                break;
+            case 7:
+                length = byte << 8;
+                break;
+            case 8:
+                length |= byte;
+                if(length - 2 > package.length) {
+                    #ifdef DEBUG_R503
+                    Serial.printf("error: not enough memory\n");
+                    #endif
+                    return ERROR_NOT_ENOUGH_MEMORY;
+                }
+                package.length = length - 2;
+                break;
+            default:
+                if(index - 9 < package.length) {
+                    package.data[index - 9] = byte;
+                } else {
+                    if(index - 9 == package.length) {
+                        package.checksum = byte << 8;
+                    } else {
+                        package.checksum |= byte;
+                        if(!package.checksumMatches()) {
+                            #ifdef DEBUG_R503
+                            Serial.printf("error: checksum mismatch\n");
+                            #endif
+                            return ERROR_CHECKSUM_MISMATCH;
+                        } else
+                            #ifdef DEBUG_R503
+                            Serial.printf("\n");
+                            #endif
+                            return SUCCESS;
+                    }
+                }
+        }
+        index++;
     }
     #ifdef DEBUG_R503
-    for(int i = 0; i < sizeof(bytes); i++) {
-        console->printf("%02X ", bytes[i]);
-    }
+    Serial.printf("error: timeout\n");
     #endif
-    
-    // header
-    uint16_t header = bytes[0] << 8 | bytes[1];
-    if(header != 0xEF01) {
-        #ifdef DEBUG_R503
-        console->printf("header mismatch\n");
-        #endif
-        return ERROR_HEADER_MISMATCH;
-    }
-    //address
-    uint32_t address = bytes[2] << 24 | bytes[3] << 16 | bytes[4] << 8 | bytes[5];
-    if(address != this->address) {
-        #ifdef DEBUG_R503
-        console->printf("address mismatch\n");
-        #endif
-        return ERROR_ADDRESS_MISMATCH;
-    }
-    // package id
-    package.id = bytes[6];
-    // package length
-    uint16_t length = bytes[7] << 8 | bytes[8];
-    if(package.length < length - 2) {
-        #ifdef DEBUG_R503
-        console->printf("not enough memory\n");
-        #endif
-        return ERROR_NOT_ENOUGH_MEMORY;
-    }
-    
-    // package data
-    ret = Serial.readBytes(package.data, package.length);
-    if(ret != package.length) {
-        #ifdef DEBUG_R503
-        console->printf("timeout\n");
-        #endif
-        return ERROR_TIMEOUT;
-    }
-    #ifdef DEBUG_R503
-    for(int i = 0; i < package.length; i++) {
-        console->printf("%02X ", package.data[i]);
-    }
-    #endif
-    
-    
-    // checksum
-    ret = Serial.readBytes(bytes, 2);
-    if(ret != 2) {
-        #ifdef DEBUG_R503
-        console->printf("timeout\n");
-        #endif
-        return ERROR_TIMEOUT;
-    }
-    package.checksum = bytes[0] << 8 | bytes[1];
-    if(!package.checksumMatches()) {
-        #ifdef DEBUG_R503
-        console->printf("checksum mismatch\n");
-        #endif
-        return ERROR_CHECKSUM_MISMATCH;
-    }
-    #ifdef DEBUG_R503
-    console->printf("%02X %02X\n", package.checksum >> 8 & 0xFF, package.checksum & 0xFF); 
-    #endif
-        
-    return SUCCESS;
+    return ERROR_TIMEOUT;
 }
 
 int R503::receiveAcknowledge(uint8_t *data, uint8_t length) {
@@ -187,11 +183,11 @@ int R503::receiveAcknowledge(uint8_t *data, uint8_t length) {
 }
 
 void R503::onFingerDown() {
-    fingerDown++;
+    
 }
 
 void R503::onFingerUp() {
-    fingerUp++;
+    
 }
 
 int R503::verifyPassword() {
@@ -200,7 +196,7 @@ int R503::verifyPassword() {
 
 int R503::readProductInfo(ProductInfo &info) {
     uint8_t command[1] = {0x3C};
-    sendPackage(Package(PID_COMMAND, sizeof(command) + 2, command));
+    sendPackage(Package(PID_COMMAND, sizeof(command), command));
     
     uint8_t data[47];
     int ret = receiveAcknowledge(data, sizeof(data));
@@ -221,4 +217,25 @@ int R503::readProductInfo(ProductInfo &info) {
 
 int R503::auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times) {
     SEND_COMMAND(0x35, control, speed, color, times);
+}
+
+#ifdef DEBUG_R503
+void R503::printProductInfo() {
+    ProductInfo info;
+    int ret = readProductInfo(info);
+    if(ret == SUCCESS) {
+        Serial.printf("module type: %s\nmodule batch number: %s\nmodule serial number: %s\n"
+            "hardware version: %d.%d\nsensor type: %s\nsensor dimension: %dx%d\n"
+            "sensor template size: %d\nsensor database size: %d\n",
+            info.module_type, info.module_batch_number, info.module_serial_number,
+            info.hardware_version[0], info.hardware_version[1], info.sensor_type,
+            info.sensor_width, info.sensor_height, info.template_size, info.database_size);
+    } else {
+        Serial.printf("error retreiving product info: error code %d\n", ret);
+    }
+}
+#endif
+
+bool R503::isTouched() {
+    return !digitalRead(touchPin);
 }
