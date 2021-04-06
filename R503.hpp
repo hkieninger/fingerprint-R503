@@ -67,6 +67,16 @@ struct ProductInfo {
     uint16_t database_size;
 };
 
+struct SystemParameter {
+    uint16_t status_register;
+    uint16_t system_identifier_code;
+    uint16_t finger_library_size;
+    uint16_t security_level;
+    uint32_t device_address;
+    uint16_t data_packet_size;
+    uint32_t baudrate;
+};
+
 class R503 {
     // at most one R503 can be used
     static R503 *instance;
@@ -109,9 +119,12 @@ public:
     int verifyPassword();
     int readProductInfo(ProductInfo &info);
     int auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times);
+    int readSystemParameter(SystemParameter &param);
+    int readTemplateNumber(uint16_t &templateNumber);
+    
     
     #ifdef DEBUG_R503
-    void printProductInfo();
+    int printProductInfo();
     #endif
     
     bool isTouched();

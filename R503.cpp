@@ -1,16 +1,27 @@
 #include "R503.hpp"
 
+/*
+ *  Makro to send a command and receive the acknowledge package
+ *  @ACK_SIZE: size of the acknowledge package or a larger integer
+ *  @VA_ARGS: the command data bytes to send
+ *  @creates data: array containing the acknowledge data
+ *  @creates confirmationCode: confirmation code (0 success, < 0 ESP8266 side error, > 0 R503 side error)
+ */
+#define RECEIVE_ACK(ACK_SIZE,...) \
+    uint8_t command[] = {__VA_ARGS__}; \
+    sendPackage(Package(PID_COMMAND, sizeof(command), command)); \
+    uint8_t data[ACK_SIZE]; \
+    int confirmationCode = receiveAcknowledge(data, ACK_SIZE);
+
 /* 
  * Makro to send a command that only expects a one byte confirmation code
- * @args: data bytes
- * @return: the confirmation code
+ * @VA_ARGS: the command data bytes to send
+ * @creates return: confirmation code (0 success, < 0 ESP8266 side error, > 0 R503 side error)
  */
 #define SEND_COMMAND(...) \
-    uint8_t data[] = {__VA_ARGS__}; \
-    sendPackage(Package(PID_COMMAND, sizeof(data), data)); \
-    uint8_t confirmationCode; \
-    return receiveAcknowledge(&confirmationCode, 1);
-
+    RECEIVE_ACK(1,__VA_ARGS__) \
+    return confirmationCode;
+    
 Package::Package(uint16_t length, uint8_t *data) : length(length), data(data) {}
 
 Package::Package(uint8_t id, uint16_t length, uint8_t *data) : id(id), length(length), data(data)  {
@@ -219,8 +230,40 @@ int R503::auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t tim
     SEND_COMMAND(0x35, control, speed, color, times);
 }
 
+int R503::readSystemParameter(SystemParameter &param) {
+    uint8_t command[1] = {0x0F};
+    sendPackage(Package(PID_COMMAND, sizeof(command), command));
+    
+    uint8_t data[17];
+    int ret = receiveAcknowledge(data, sizeof(data));
+    
+    param.status_register = data[1] << 8 | data[2];
+    param.system_identifier_code = data[3] << 8 | data[4];
+    param.finger_library_size = data[5] << 8 | data[6];
+    param.security_level = data[7] << 8 | data[8];
+    param.device_address = data[9] << 24 | data[10] << 16 | data[11] << 8 | data[12];
+    param.data_packet_size = data[13] << 8 | data[14];
+    param.baudrate = 9600 * (data[15] << 8 | data[16]);
+    
+    return ret;
+}
+
+int R503::readTemplateNumber(uint16_t &templateNumber) {
+    RECEIVE_COMMAND(3, 0x1D);
+
+    /*uint8_t command[1] = {0x1D};
+    sendPackage(Package(PID_COMMAND, sizeof(command), command));
+    
+    uint8_t data[3];
+    int ret = receiveAcknowledge(data, sizeof(data));
+    
+    templateNumber = data[1] << 8 | data[0];*/
+    
+    return ret;
+}
+
 #ifdef DEBUG_R503
-void R503::printProductInfo() {
+int R503::printProductInfo() {
     ProductInfo info;
     int ret = readProductInfo(info);
     if(ret == SUCCESS) {
@@ -233,6 +276,7 @@ void R503::printProductInfo() {
     } else {
         Serial.printf("error retreiving product info: error code %d\n", ret);
     }
+    return ret;
 }
 #endif
 
