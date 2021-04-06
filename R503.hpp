@@ -1,7 +1,7 @@
 #ifndef R503_HPP
 #define R503_HPP
 
-#define DEBUG_R503
+//#define R503_DEBUG
 
 #include <stdint.h>
 #include "SoftwareSerial.h"
@@ -9,17 +9,24 @@
 /*
  * Confirmation Codes
  */
+// on R503 side corresponds to command execution complete
+#define R503_SUCCESS 0 
 // ESP8266 side confirmation codes
-#define SUCCESS 0
-#define ERROR_ADDRESS_MISMATCH (-2)
-#define ERROR_CHECKSUM_MISMATCH (-3)
-#define ERROR_TIMEOUT (-4)
-#define ERROR_PID_MISMATCH (-5)
-#define ERROR_NOT_ENOUGH_MEMORY (-6)
+#define R503_ADDRESS_MISMATCH (-2)
+#define R503_CHECKSUM_MISMATCH (-3)
+#define R503_TIMEOUT (-4)
+#define R503_PID_MISMATCH (-5)
+#define R503_NOT_ENOUGH_MEMORY (-6)
 // R503 side confirmation codes
-#define COMMAND_EXECUTION_COMPLETE 0x00
-#define ERROR_RECEIVING_PACKAGE 0x01
-#define WRONG_PASSWORD 0x13
+#define R503_ERROR_RECEIVING_PACKAGE 0x01
+#define R503_WRONG_PASSWORD 0x13
+#define R503_NO_FINGER 0x02
+#define R503_ERROR_TAKING_IMAGE 0x03
+#define R503_IMAGE_MESSY 0x06
+#define R503_FEATURE_FAIL 0x07
+#define R503_NO_IMAGE 0x15
+#define R503_BAD_LOCATION 0x0B
+#define R503_ERROR_WRITING_FLASH 0x18
 
 
 // package ID
@@ -41,8 +48,8 @@
 #define AURA_BLUE 0x02
 #define AURA_PURPLE 0x03
 
-
-#define RECEIVE_TIMEOUT 1000
+// timeout in ms for receiving a package
+#define R503_RECEIVE_TIMEOUT 1000
 
 struct Package {
     uint8_t id;
@@ -94,6 +101,9 @@ public:
     R503(int rxPin, int txPin, int touchPin, uint32_t address = 0xFFFFFFFF, uint32_t password = 0x0, long baudrate = 57600);
     virtual ~R503();
     
+    void onFingerDown();
+    void onFingerUp();
+    
     void begin();
     void sendPackage(Package const &package);
     
@@ -113,18 +123,62 @@ public:
      */
     int receiveAcknowledge(uint8_t *data, uint8_t length);
     
-    void onFingerDown();
-    void onFingerUp();
-    
+    /*
+     * you must call verifyPassword() after begin() and before any other command
+     */
     int verifyPassword();
     int readProductInfo(ProductInfo &info);
     int auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times);
     int readSystemParameter(SystemParameter &param);
-    int readTemplateNumber(uint16_t &templateNumber);
+    // @info: pointer to memory block of at least 512 byte
+    int readInformationPage(char *info);
+    
+    /* 
+     * the R503 has
+     *   - 1 image buffer
+     *   - 6 feature buffers (refered in the datasheet as character buffers)
+     *
+     * to enroll a finger
+     *   - get finger image
+     *   - extract features
+     *   - fuse 2 to 6 feature buffer into a model
+     *
+     * to match fingerprint
+     */
     
     
-    #ifdef DEBUG_R503
+    int readModelCount(uint16_t &count);
+    
+    /*
+     * detects finger on the sensor, takes image and writes it into the image buffer
+     * @return: R503_NOFINGER if no finger is on the sensor
+     */
+    int takeImage();
+    
+    /*
+     * extracts the features from the finger image in the image buffer
+     * and writes them into the feature buffer indentified by @featureBuffer
+     * @featureBuffer: number in the range 1 to 6
+     */
+    int extractFeatures(uint8_t featureBuffer);
+    
+    /*
+     * combines the features from featureBuffer 1 and featureBuffer 2 into one model,
+     * which is written back into featureBuffer 1 and featureBuffer 2
+     * TODO check if create model only uses the first 2 feature Buffers or more if more are available by registering different fingers
+     */
+    int createModel();
+    
+    /*
+     * TODO test if @featureBuffer and featureBuffer+1 are stored
+     */
+    int storeModel(uint8_t featureBuffer, uint16_t location);
+    
+    int searchFinger(uint8_t featureBuffer, uint16_t &location, uint16_t &score);
+    
+    #ifdef R503_DEBUG
     int printProductInfo();
+    int printSystemParameter();
     #endif
     
     bool isTouched();
