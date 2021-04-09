@@ -1,15 +1,16 @@
 /*
  * test if module and sensor are okay and print content of information registers
- * make sure R503_DEBUG is set to 0x04 and check baudrate
+ * check baudrate and pins
+ * (make sure R503_DEBUG in R503.hpp is set to 0x04)
  */
 
 #include <R503.hpp>
 
 #define RX_PIN 13
 #define TX_PIN 12
-#define WAKEUP_PIN 5
+#define BAUDRATE 57600
 
-R503 fps(RX_PIN, TX_PIN, WAKEUP_PIN, 0xFFFFFFFF, 0x0, 9600);
+R503 fps(RX_PIN, TX_PIN, 0xFFFFFFFF, 0x0, BAUDRATE);
 
 void setup() {
   Serial.begin(115200);

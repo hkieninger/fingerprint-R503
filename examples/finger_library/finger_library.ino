@@ -7,9 +7,9 @@
 
 #define RX_PIN 13
 #define TX_PIN 12
-#define WAKEUP_PIN 5
+#define BAUDRATE 57600
 
-R503 fps(RX_PIN, TX_PIN, 0xFFFFFFFF, 0x0, 9600); // fps: finger print sensor
+R503 fps(RX_PIN, TX_PIN, 0xFFFFFFFF, 0x0, BAUDRATE); // fps: finger print sensor
 
 void setup() {
   Serial.begin(115200);
