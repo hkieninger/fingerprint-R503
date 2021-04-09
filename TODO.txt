@@ -1,0 +1,8 @@
+R503 sauber implementieren, sortieren, testen, dokumentieren
+
+needed functionalities:
+    -enroll finger
+    -webinterface to open door and manage finger enrolling (displaying fingerprints)
+    -verify fingerprint and open door
+
+top down development of programm

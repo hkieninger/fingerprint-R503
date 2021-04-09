@@ -12,7 +12,8 @@
     uint8_t command[] = {__VA_ARGS__}; \
     sendPackage(Package(PID_COMMAND, sizeof(command), command)); \
     uint8_t data[ACK_SIZE]; \
-    int confirmationCode = receiveAcknowledge(data, ACK_SIZE);
+    uint16_t dataSize = sizeof(data); \
+    int confirmationCode = receiveAcknowledge(data, dataSize);
 
 /* 
  * Makro to send a command that only expects a one byte confirmation code
@@ -23,6 +24,9 @@
     RECEIVE_ACK(1,__VA_ARGS__) \
     return confirmationCode;
     
+// =============================================================================
+// implementation of package structure
+// =============================================================================   
 Package::Package(uint16_t length, uint8_t *data) : length(length), data(data) {}
 
 Package::Package(uint8_t id, uint16_t length, uint8_t *data) : id(id), length(length), data(data)  {
@@ -47,17 +51,45 @@ bool Package::checksumMatches() {
     return false;
 }
 
-void R503::fallingISR() {
-    //R503::instance->onFingerDown();
-}
+// =============================================================================
+// implementation of R503 class
+// =============================================================================  
 
-void R503::risingISR() {
-    //R503::instance->onFingerUp();
+char const *R503::errorMsg(int code) {
+    switch(code) {
+        case R503_SUCCESS: return "success";
+        // ESP8266 side confirmation codes
+        case R503_ADDRESS_MISMATCH: return "address mismatch";
+        case R503_CHECKSUM_MISMATCH: return "checksum mismatch";
+        case R503_TIMEOUT: return "timeout";
+        case R503_PID_MISMATCH: return "package id mismatch";
+        case R503_NOT_ENOUGH_MEMORY: return "not enough memory";
+        case R503_SPECIFICATION_ERROR: return "specification error";
+        case R503_INVALID_BAUDRATE: return "invalid baudrate";
+        case R503_RESET_TIMEOUT: return "no handshake sign received";
+        // R503 side confirmation codes
+        case R503_ERROR_RECEIVING_PACKAGE: return "error receiving package";
+        case R503_WRONG_PASSWORD: return "wrong password";
+        case R503_NO_FINGER: return "no finger";
+        case R503_ERROR_TAKING_IMAGE: return "error taking image";
+        case R503_IMAGE_MESSY: return "image messy";
+        case R503_FEATURE_FAIL: return "feature fail";
+        case R503_NO_IMAGE: return "image buffer empty";
+        case R503_BAD_LOCATION: return "invalid location (page id outside finger library)";
+        case R503_ERROR_WRITING_FLASH: return "error writing flash";
+        case R503_NO_MATCH: return "features do not match template";
+        case R503_NO_MATCH_IN_LIBRARY: return "no matching template in fingerprint library";
+        case R503_SENSOR_ABNORMAL: return "sensor abnormal";
+        default:
+            // reserve enough memory to print signed 16 bit or 32 bit integer
+            static char str[sizeof("unknown error code ") + 1 + sizeof(int) * 8 / 3]; 
+            snprintf(str, sizeof(str), "unknown error code %d", code);
+            return str;
+    }
 }
 
 R503::R503(int rxPin, int txPin, int touchPin, uint32_t address, uint32_t password, long baudrate) : 
     rxPin(rxPin), txPin(txPin), touchPin(touchPin), address(address), password(password), baudrate(baudrate) {
-    //R503::instance = this;
     serial = new SoftwareSerial(rxPin, txPin);
 }
 
@@ -65,13 +97,33 @@ R503::~R503() {
     delete serial;
 }
 
-void R503::begin() {
+int R503::init() {
+    serial->begin(baudrate);
     pinMode(rxPin, INPUT);
     pinMode(txPin, OUTPUT);
-    serial->begin(baudrate);
-    pinMode(touchPin, INPUT);
-    //attachInterrupt(digitalPinToInterrupt(touchPin), R503::fallingISR, FALLING);
-    //attachInterrupt(digitalPinToInterrupt(touchPin), R503::risingISR, RISING);
+    if(touchPin >= 0)
+        pinMode(touchPin, INPUT);
+    
+    int ret = verifyPassword();
+    if(ret != R503_SUCCESS) {
+        #if R503_DEBUG & 0x02
+        Serial.printf("error verifying password: %s\n", R503::errorMsg(ret));
+        #endif
+        return ret;
+    }
+    
+    SystemParameter param;
+    ret = readSystemParameter(param);
+    if(ret != R503_SUCCESS) {
+        #if R503_DEBUG & 0x02
+        Serial.printf("error reading system parameters: %s\n", R503::errorMsg(ret));
+        #endif
+        return ret;
+    }
+    finger_library_size = param.finger_library_size;
+    data_package_size = param.data_package_size;
+
+    return R503_SUCCESS;
 }
 
 void R503::sendPackage(Package const &package) {
@@ -83,7 +135,7 @@ void R503::sendPackage(Package const &package) {
         length >> 8, length
     };
     
-    #ifdef R503_DEBUG
+    #if R503_DEBUG & 0x01
     static int packageCount = 0;
     Serial.printf("sending package %d: ", packageCount++);
     for(int i = 0; i < sizeof(bytes); i++) {
@@ -102,7 +154,7 @@ void R503::sendPackage(Package const &package) {
 }
 
 int R503::receivePackage(Package &package) {
-    #ifdef R503_DEBUG
+    #if R503_DEBUG & 0x01
     static int packageCount = 0;
     Serial.printf("receiving package %d: ", packageCount++);
     #endif
@@ -114,7 +166,7 @@ int R503::receivePackage(Package &package) {
         int byte = serial->read();
         if(byte == -1)
             continue;
-        #ifdef R503_DEBUG
+        #if R503_DEBUG & 0x01
         Serial.printf("%02X ", byte);
         #endif
         switch(index) {
@@ -133,7 +185,7 @@ int R503::receivePackage(Package &package) {
             case 4:
             case 5:
                 if(byte != ((address >> (5 - index) * 8) & 0xFF)) {
-                    #ifdef R503_DEBUG
+                    #if R503_DEBUG & 0x03
                     Serial.printf("error: address mismatch\n");
                     #endif
                     return R503_ADDRESS_MISMATCH;
@@ -148,7 +200,7 @@ int R503::receivePackage(Package &package) {
             case 8:
                 length |= byte;
                 if(length - 2 > package.length) {
-                    #ifdef R503_DEBUG
+                    #if R503_DEBUG & 0x03
                     Serial.printf("error: not enough memory\n");
                     #endif
                     return R503_NOT_ENOUGH_MEMORY;
@@ -164,12 +216,12 @@ int R503::receivePackage(Package &package) {
                     } else {
                         package.checksum |= byte;
                         if(!package.checksumMatches()) {
-                            #ifdef R503_DEBUG
+                            #if R503_DEBUG & 0x03
                             Serial.printf("error: checksum mismatch\n");
                             #endif
                             return R503_CHECKSUM_MISMATCH;
                         } else
-                            #ifdef R503_DEBUG
+                            #if R503_DEBUG & 0x01
                             Serial.printf("\n");
                             #endif
                             return R503_SUCCESS;
@@ -178,15 +230,16 @@ int R503::receivePackage(Package &package) {
         }
         index++;
     }
-    #ifdef R503_DEBUG
+    #if R503_DEBUG & 0x03
     Serial.printf("error: timeout\n");
     #endif
     return R503_TIMEOUT;
 }
 
-int R503::receiveAcknowledge(uint8_t *data, uint8_t length) {
+int R503::receiveAcknowledge(uint8_t *data, uint16_t &length) {
     Package acknowledge(length, data);
     int ret = receivePackage(acknowledge);
+    length = acknowledge.length;
     if(ret != R503_SUCCESS)
         return ret;
     if(acknowledge.id != PID_ACKNOWLEDGE)
@@ -194,16 +247,70 @@ int R503::receiveAcknowledge(uint8_t *data, uint8_t length) {
     return data[0];
 }
 
-void R503::onFingerDown() {
-    
+int R503::receiveData(uint8_t *data, uint16_t &length) {
+    uint16_t offset = 0;
+    uint8_t buffer[data_package_size];
+    Package package(sizeof(buffer), buffer);
+    int ret;
+    do {
+        ret = receivePackage(package);
+        if(ret != R503_SUCCESS) {
+            cleanSerial(length * 10 * 1000 / baudrate);
+            return ret;
+        }
+        if(package.id != PID_DATA && package.id != PID_END) {
+            cleanSerial(length * 10 * 1000 / baudrate);
+            return R503_PID_MISMATCH;
+        }
+        if(offset + package.length > length) {
+            cleanSerial();
+            return R503_NOT_ENOUGH_MEMORY;
+        }
+        memcpy(data + offset, package.data, package.length);
+        offset += package.length;
+        package.length = sizeof(buffer);
+    } while(package.id != PID_END);
+    length = offset;
+    return R503_SUCCESS;
 }
 
-void R503::onFingerUp() {
-    
+void R503::cleanSerial(unsigned long milliseconds) {
+    serial->flush();
+    delay(milliseconds);
+    while(serial->read() != -1);
 }
 
 int R503::verifyPassword() {
     SEND_CMD(0x13, password >> 24, password >> 16, password >> 8, password);
+}
+
+int R503::setBaudrate(long baudrate) {
+    switch(baudrate) {
+        case 9600:
+        case 19200:
+        case 38400:
+        case 57600:
+        case 115200:
+            {
+            RECEIVE_ACK(1, 0x0E, 4, baudrate / 9600);
+            if(confirmationCode == R503_SUCCESS) {
+                serial->end();
+                serial->begin(baudrate);
+                this->baudrate = baudrate;
+            }
+            return confirmationCode;
+            }
+        default: 
+            return R503_INVALID_BAUDRATE;
+    }
+}
+
+int R503::setSecurityLevel(uint8_t level) {
+    SEND_CMD(0x0E, 5, level);
+}
+
+int R503::auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times) {
+    SEND_CMD(0x35, control, speed, color, times);
 }
 
 int R503::readProductInfo(ProductInfo &info) {
@@ -223,10 +330,6 @@ int R503::readProductInfo(ProductInfo &info) {
     return confirmationCode;
 }
 
-int R503::auraControl(uint8_t control, uint8_t speed, uint8_t color, uint8_t times) {
-    SEND_CMD(0x35, control, speed, color, times);
-}
-
 int R503::readSystemParameter(SystemParameter &param) {
     RECEIVE_ACK(17, 0x0F);
     
@@ -235,7 +338,7 @@ int R503::readSystemParameter(SystemParameter &param) {
     param.finger_library_size = data[5] << 8 | data[6];
     param.security_level = data[7] << 8 | data[8];
     param.device_address = data[9] << 24 | data[10] << 16 | data[11] << 8 | data[12];
-    param.data_packet_size = 32 << (data[13] << 8 | data[14]);
+    param.data_package_size = 32 << (data[13] << 8 | data[14]);
     param.baudrate = 9600 * (data[15] << 8 | data[16]);
     
     return confirmationCode;
@@ -245,12 +348,44 @@ int R503::readInformationPage(char *info) {
     RECEIVE_ACK(1, 0x16);
     if(confirmationCode != R503_SUCCESS)
         return confirmationCode;
-    //TODO add code the get the data packets
+    
+    uint16_t length = 512;
+    return receiveData(reinterpret_cast<uint8_t *>(info), length);
 }
 
-int R503::readModelCount(uint16_t &count) {
+int R503::handShake() {
+    SEND_CMD(0x40);
+}
+
+int R503::checkSensor() {
+    SEND_CMD(0x36);
+}
+
+int R503::softReset() {
+    RECEIVE_ACK(1, 0x3D);
+    if(confirmationCode != R503_SUCCESS)
+        return confirmationCode;
+    unsigned long start = millis();
+    while(millis() - start < R503_SOFTRESET_TIMEOUT) {
+        int byte = serial->read();
+        if(byte == -1) {
+            delay(1);
+        } else if(byte == 0x55) {
+            return R503_SUCCESS;
+        }
+    }
+    return R503_RESET_TIMEOUT;
+}
+
+int R503::templateCount(uint16_t &count) {
     RECEIVE_ACK(3, 0x1D);
     count = data[1] << 8 | data[2]; 
+    return confirmationCode;
+}
+
+int R503::readIndexTable(uint8_t *table, uint8_t page) {
+    RECEIVE_ACK(33, 0x1F, page);
+    memcpy(table, &data[1], 32);
     return confirmationCode;
 }
 
@@ -258,28 +393,58 @@ int R503::takeImage() {
     SEND_CMD(0x01);
 }
 
-int R503::extractFeatures(uint8_t featureBuffer) {
-    SEND_CMD(0x02, featureBuffer);
+int R503::uploadImage(uint8_t *image, uint16_t &size) {
+    RECEIVE_ACK(1, 0x0A);
+    if(confirmationCode != R503_SUCCESS)
+        return confirmationCode;
+    return receiveData(image, size);
 }
 
-int R503::createModel() {
+int R503::extractFeatures(uint8_t characterBuffer) {
+    SEND_CMD(0x02, characterBuffer);
+}
+
+int R503::createTemplate() {
     SEND_CMD(0x05);
 }
 
-int R503::storeModel(uint8_t featureBuffer, uint16_t location) {
-    SEND_CMD(0x06, featureBuffer, location >> 8, location);
+int R503::storeTemplate(uint8_t characterBuffer, uint16_t location) {
+    SEND_CMD(0x06, characterBuffer, location >> 8, location);
 }
 
-int R503::searchFinger(uint8_t featureBuffer, uint16_t &location, uint16_t &score) {
+int R503::deleteTemplate(uint16_t location) {
+    SEND_CMD(0x0C, location >> 8, location, 0x00, 0x01);
+}
+
+int R503::emptyLibrary() {
+    SEND_CMD(0x0D);
+}
+
+int R503::loadTemplate(uint8_t characterBuffer, uint16_t location) {
+    SEND_CMD(0x07, characterBuffer, location >> 8, location);
+}
+
+int R503::matchFinger(uint16_t &score) {
+    SEND_CMD(0x03);
+}
+
+int R503::searchFinger(uint8_t characterBuffer, uint16_t &location, uint16_t &score) {
     uint16_t startPage = 0;
-    uint16_t pageCount = 8; //TODO adapt via capacity of sensor
-    RECEIVE_ACK(5, 0x04, featureBuffer, startPage >> 8, startPage, pageCount >> 8, pageCount);
+    uint16_t pageCount = finger_library_size;
+    RECEIVE_ACK(5, 0x04, characterBuffer, startPage >> 8, startPage, pageCount >> 8, pageCount);
     location = data[1] << 8 | data[2];
     score = data[3] << 8 | data[4];
     return confirmationCode;
 }
 
-#ifdef R503_DEBUG
+bool R503::isTouched() {
+    if(touchPin >= 0) {
+        return !digitalRead(touchPin);
+    }
+    return false;
+}
+
+#if R503_DEBUG & 0x04
 int R503::printProductInfo() {
     ProductInfo info;
     int ret = readProductInfo(info);
@@ -291,7 +456,7 @@ int R503::printProductInfo() {
             info.hardware_version[0], info.hardware_version[1], info.sensor_type,
             info.sensor_width, info.sensor_height, info.template_size, info.database_size);
     } else {
-        Serial.printf("error retreiving product info: error code %d\n", ret);
+        Serial.printf("error retreiving product info: %s\n", R503::errorMsg(ret));
     }
     return ret;
 }
@@ -300,18 +465,14 @@ int R503::printSystemParameter() {
     SystemParameter param;
     int ret = readSystemParameter(param);
     if(ret == R503_SUCCESS) {
-        Serial.printf("status register: %d\nsystem identifier code: %04X\n"
-            "finger library size: %d\nsecurity level: %d\ndevice address: %08X\n"
-            "data packet size: %d bytes\nbaudrate: %d\n",
+        Serial.printf("status register: 0x%02X\nsystem identifier code: 0x%04X\n"
+            "finger library size: %d\nsecurity level: %d\ndevice address: 0x%08X\n"
+            "data package size: %d bytes\nbaudrate: %d\n",
             param.status_register, param.system_identifier_code, param.finger_library_size,
-            param.security_level, param.device_address, param.data_packet_size, param.baudrate);
+            param.security_level, param.device_address, param.data_package_size, param.baudrate);
     } else {
-        Serial.printf("error retreiving sytem parameters: error code %d\n", ret);
+        Serial.printf("error retreiving sytem parameters: %s\n", R503::errorMsg(ret));
     }
     return ret;
 }
 #endif
-
-bool R503::isTouched() {
-    return !digitalRead(touchPin);
-}
