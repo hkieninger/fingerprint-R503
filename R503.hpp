@@ -6,6 +6,12 @@
  * datasheet for R503: https://cdn-shop.adafruit.com/product-files/4651/4651_R503+fingerprint+module+user+manual.pdf
  * this library was inspired by the adafruit fingerprint sensor library: https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library
  * tested with ESP12 and R503
+ *
+ * working examples are provided in the example/ directory
+ *
+ * since datasheet for R503 lacks some information
+ * there remains aswell some unclaritys in the documentating comments
+ * these places were marked with TODO
  */
 
 /*
@@ -141,6 +147,7 @@ struct SystemParameter {
  *   2. extractFeatures(k): extract features from the image buffer and write them into character buffer k
  *   3. repeat 1. step and 2. step 2 to 6 times with k starting from 1
  *   4. createTemplate(): fuse the extracted features into a template, which is written back to character buffer 1 and 2
+ *                        (TODO check if it is really written back to character buffer 1 and 2)
  *   5. storeTemplate(1, l): store the template from character buffer 1 and 2 at location l in the library (flash memory)
  *
  * to find fingerprint
@@ -314,11 +321,11 @@ public:
     /*
      * combines the features from characterBuffer 1 to k into a template
      * k is the characterBuffer where the most recent feature extraction was written to
-     * the template is written back to characterBuffer 1 and 2
+     * the template is written back to characterBuffer 1 and 2 (TODO check wether this is really the case)
      *
      *
      * TODO check if create template only uses the first 2 feature buffers or more if more are available by registering different fingers
-     * check how many character buffers a template needs
+     * check how many character buffers a template needs -> create template seems to really use the k fingers
      */
     int createTemplate();
     
@@ -344,7 +351,7 @@ public:
      * @score: reference to write the matching score
      * @return: R503_NO_MATCH if features do not match template
      *
-     * TODO find out what ModelBuffer is (charaterBuffer 1 and 2?)
+     * TODO find out what ModelBuffer is (charaterBuffer 1 and 2?) -> did not manage to overwrite template
      */
     int matchFinger(uint16_t &score);
     
