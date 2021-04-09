@@ -88,8 +88,8 @@ char const *R503::errorMsg(int code) {
     }
 }
 
-R503::R503(int rxPin, int txPin, int touchPin, uint32_t address, uint32_t password, long baudrate) : 
-    rxPin(rxPin), txPin(txPin), touchPin(touchPin), address(address), password(password), baudrate(baudrate) {
+R503::R503(int rxPin, int txPin, uint32_t address, uint32_t password, long baudrate) : 
+    rxPin(rxPin), txPin(txPin), address(address), password(password), baudrate(baudrate) {
     serial = new SoftwareSerial(rxPin, txPin);
 }
 
@@ -101,8 +101,6 @@ int R503::init() {
     serial->begin(baudrate);
     pinMode(rxPin, INPUT);
     pinMode(txPin, OUTPUT);
-    if(touchPin >= 0)
-        pinMode(touchPin, INPUT);
     
     int ret = verifyPassword();
     if(ret != R503_SUCCESS) {
@@ -425,7 +423,9 @@ int R503::loadTemplate(uint8_t characterBuffer, uint16_t location) {
 }
 
 int R503::matchFinger(uint16_t &score) {
-    SEND_CMD(0x03);
+    RECEIVE_ACK(3, 0x03);
+    score = data[1] << 8 | data[2]; 
+    return confirmationCode;
 }
 
 int R503::searchFinger(uint8_t characterBuffer, uint16_t &location, uint16_t &score) {
@@ -435,13 +435,6 @@ int R503::searchFinger(uint8_t characterBuffer, uint16_t &location, uint16_t &sc
     location = data[1] << 8 | data[2];
     score = data[3] << 8 | data[4];
     return confirmationCode;
-}
-
-bool R503::isTouched() {
-    if(touchPin >= 0) {
-        return !digitalRead(touchPin);
-    }
-    return false;
 }
 
 #if R503_DEBUG & 0x04

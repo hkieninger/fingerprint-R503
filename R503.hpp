@@ -45,7 +45,9 @@
 #define R503_NO_IMAGE 0x15
 #define R503_BAD_LOCATION 0x0B
 #define R503_ERROR_WRITING_FLASH 0x18
+// returned by matchFinger()
 #define R503_NO_MATCH 0x08
+// returned by searchFinger()
 #define R503_NO_MATCH_IN_LIBRARY 0x09
 #define R503_SENSOR_ABNORMAL 0x29
 
@@ -156,7 +158,7 @@ class R503 {
     uint16_t finger_library_size;
     uint16_t data_package_size;
     
-    int rxPin, txPin, touchPin;
+    int rxPin, txPin;
     SoftwareSerial *serial;
     
 public:
@@ -168,15 +170,14 @@ public:
     /*
      * @rxPin: the green wire
      * @txPin: the yellow wire
-     * @touchPin: the blue wire, set to -1 if not connected
-     * red wire is VCC connect to 3.3V
+     * red wire is VCC connects to 3.3V
      * black wire is GND
-     * white wire connect to 3.3V
-     * 
-     * when sensor gets touched touchPin goes from HIGH to LOW and when released it switches back from LOW to HIGH
-     * you may want to attach an interrupt serivce routine to touchPin after calling init() to handle this signal
+     * blue wire serves for wakeup, when touched signal goes from HIGH to LOW and when released it switches back from LOW to HIGH
+     *     you may want to attach an interrupt serivce routine to the blue wire after calling init() to handle this signal
+     *     to detect wether sensor is touched while enrolling new finger you best use takeImage() and check wether R503_NO_FINGER is returned 
+     * white wire connects to 3.3V
      */
-    R503(int rxPin, int txPin, int touchPin = -1, uint32_t address = 0xFFFFFFFF, uint32_t password = 0x0, long baudrate = 57600);
+    R503(int rxPin, int txPin, uint32_t address = 0xFFFFFFFF, uint32_t password = 0x0, long baudrate = 57600);
     virtual ~R503();
     
     /*
@@ -354,12 +355,6 @@ public:
      * @return: R503_NO_MATCH_IN_LIBRARY if no matching template was found
      */
     int searchFinger(uint8_t characterBuffer, uint16_t &location, uint16_t &score);
-    
-    /*
-     * only use this method if you specified touchPin when calling the constructor
-     * alternativly presence of finger on sensor can be detected with takeImage()
-     */
-    bool isTouched();
     
     // methods to print information about sensor with Serial.print to Serial Monitor
     #if R503_DEBUG & 0x04
